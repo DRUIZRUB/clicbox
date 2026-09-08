@@ -1,0 +1,48 @@
+{
+  "manifest_version": 3,
+  "name": "ClickBox Importador",
+  "version": "1.1",
+  "description": "Importa productos individuales o catálogos completos de Sam's Club, Amazon, Walmart y más a tu catálogo de ClickBox.",
+  "permissions": ["activeTab", "storage", "scripting"],
+  "host_permissions": [
+    "https://www.samsclub.com/*",
+    "https://www.amazon.com/*",
+    "https://www.walmart.com/*",
+    "https://clicbox-81bfc.web.app/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    },
+    "default_title": "ClickBox Importador"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.samsclub.com/*",
+        "*://*.amazon.com/*",
+        "*://*.walmart.com/*",
+        "*://*.target.com/*",
+        "*://*.costco.com/*",
+        "*://*.ebay.com/*",
+        "*://*.bestbuy.com/*",
+        "*://*.homedepot.com/*",
+        "*://*.lowes.com/*",
+        "*://clicbox-81bfc.web.app/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}
