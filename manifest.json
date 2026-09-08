@@ -5,10 +5,16 @@
   "description": "Importa productos individuales o catálogos completos de Sam's Club, Amazon, Walmart y más a tu catálogo de ClickBox.",
   "permissions": ["activeTab", "storage", "scripting"],
   "host_permissions": [
-    "https://www.samsclub.com/*",
-    "https://www.amazon.com/*",
-    "https://www.walmart.com/*",
-    "https://clicbox-81bfc.web.app/*"
+    "*://*.samsclub.com/*",
+    "*://*.amazon.com/*",
+    "*://*.walmart.com/*",
+    "*://*.target.com/*",
+    "*://*.costco.com/*",
+    "*://*.ebay.com/*",
+    "*://*.bestbuy.com/*",
+    "*://*.homedepot.com/*",
+    "*://*.lowes.com/*",
+    "*://clicbox-81bfc.web.app/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -17,8 +23,12 @@
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icon16.png",
+      "32": "icon32.png",
       "48": "icon48.png",
-      "128": "icon128.png"
+      "64": "icon64.png",
+      "128": "icon128.png",
+      "256": "icon256.png",
+      "512": "icon512.png"
     },
     "default_title": "ClickBox Importador"
   },
@@ -42,7 +52,11 @@
   ],
   "icons": {
     "16": "icon16.png",
+    "32": "icon32.png",
     "48": "icon48.png",
-    "128": "icon128.png"
+    "64": "icon64.png",
+    "128": "icon128.png",
+    "256": "icon256.png",
+    "512": "icon512.png"
   }
 }

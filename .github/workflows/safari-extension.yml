@@ -1,0 +1,108 @@
+name: Build Safari Web Extension for App Store
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-safari-extension:
+    name: Convert & Build Safari Web Extension
+    runs-on: macos-14
+
+    env:
+      PROJECT_NAME: "ClickBox"
+      BUNDLE_ID: "com.mycompany.clicbox"
+      SKU: "TT353XSV23"
+      APPLE_APP_ID: "6758314176"
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode Version
+        run: |
+          sudo xcode-select -s /Applications/Xcode_15.4.app || sudo xcode-select -s /Applications/Xcode.app
+          xcodebuild -version
+
+      - name: Convert Web Extension to Xcode Project
+        run: |
+          echo "Converting Web Extension with xcrun safari-web-extension-converter..."
+          xcrun safari-web-extension-converter . \
+            --project-name "${{ env.PROJECT_NAME }}" \
+            --bundle-identifier "${{ env.BUNDLE_ID }}" \
+            --swift \
+            --no-open \
+            --force
+
+          ls -la "${{ env.PROJECT_NAME }}"
+
+      - name: Setup App Store Icons in Xcode Assets
+        run: |
+          echo "Copying 1024x1024 App Store icon and extension assets..."
+          # Locate asset catalogs created by converter
+          find "${{ env.PROJECT_NAME }}" -name "*.xcassets" -type d
+          
+          # Copy master App Store icon to output directory
+          mkdir -p build_output
+          cp AppIcon-1024.png build_output/AppIcon-1024.png
+          
+          # Copy to any generated AppIcon sets
+          find "${{ env.PROJECT_NAME }}" -name "AppIcon.appiconset" -type d | while read -r iconset; do
+            echo "Updating $iconset with master icon..."
+            cp AppIcon-1024.png "$iconset/AppIcon-1024.png" || true
+          done
+
+      - name: Build macOS App Target (Unsigned Release)
+        run: |
+          echo "Building macOS application & extension..."
+          xcodebuild -project "${{ env.PROJECT_NAME }}/${{ env.PROJECT_NAME }}.xcodeproj" \
+            -scheme "${{ env.PROJECT_NAME }} (macOS)" \
+            -configuration Release \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            clean build
+
+      - name: Build iOS App Target (Unsigned Release)
+        run: |
+          echo "Building iOS application & extension..."
+          xcodebuild -project "${{ env.PROJECT_NAME }}/${{ env.PROJECT_NAME }}.xcodeproj" \
+            -scheme "${{ env.PROJECT_NAME }} (iOS)" \
+            -destination "generic/platform=iOS" \
+            -configuration Release \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            clean build
+
+      - name: Prepare Distribution Artifacts
+        run: |
+          echo "Packaging Xcode Project and Assets for download..."
+          mkdir -p dist
+          
+          # Zip the complete Xcode project so it can be opened directly on any Mac
+          zip -r "dist/ClickBox-Xcode-Project.zip" "${{ env.PROJECT_NAME }}" -x "*.DS_Store"
+          
+          # Copy Store assets
+          cp AppIcon-1024.png dist/
+          cp -r icon*.png dist/
+          
+          echo "Files prepared in dist/:"
+          ls -lh dist/
+
+      - name: Upload Xcode Project Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ClickBox-Safari-Xcode-Project
+          path: dist/ClickBox-Xcode-Project.zip
+          retention-days: 30
+
+      - name: Upload App Store Assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: App-Store-Connect-Assets
+          path: |
+            dist/AppIcon-1024.png
+            dist/icon*.png
+          retention-days: 30

@@ -2,7 +2,9 @@
 // Acts as a CORS proxy relay: the ClickBox admin page sends messages here
 // and this worker fetches Sam's Club API (which allows cross-origin GET from extensions)
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+const browserAPI = typeof browser !== 'undefined' ? browser : chrome;
+
+browserAPI.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message.type === 'CLICKBOX_FETCH') {
     const { url } = message;
     fetch(url, {

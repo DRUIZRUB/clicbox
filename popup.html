@@ -99,8 +99,9 @@
   </button>
   <p class="tip">Busca el icono 📦 en la esquina de la tienda</p>
   <script>
+    const browserAPI = typeof browser !== 'undefined' ? browser : chrome;
     document.getElementById('openAdmin').onclick = function() {
-      chrome.tabs.create({ url: 'https://clicbox-81bfc.web.app/admin/productos' });
+      browserAPI.tabs.create({ url: 'https://clicbox-81bfc.web.app/admin/productos' });
     };
   </script>
 </body>

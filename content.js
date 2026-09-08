@@ -12,8 +12,9 @@
   if (location.hostname === 'clicbox-81bfc.web.app') {
     window.CLICKBOX_EXT_FETCH = (url) =>
       new Promise((resolve, reject) => {
-        chrome.runtime.sendMessage({ type: 'CLICKBOX_FETCH', url }, (response) => {
-          if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+        const browserAPI = typeof browser !== 'undefined' ? browser : chrome;
+        browserAPI.runtime.sendMessage({ type: 'CLICKBOX_FETCH', url }, (response) => {
+          if (browserAPI.runtime.lastError) return reject(new Error(browserAPI.runtime.lastError.message));
           if (response?.ok) resolve(response.data);
           else reject(new Error(response?.error || 'Fetch failed'));
         });
