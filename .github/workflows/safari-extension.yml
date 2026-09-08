@@ -1,4 +1,4 @@
-name: Build Safari Web Extension for App Store
+name: Build & Upload to App Store Connect
 
 on:
   push:
@@ -8,15 +8,18 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-safari-extension:
-    name: Convert & Build Safari Web Extension
+  build-and-deploy:
+    name: Build & Deploy to App Store Connect
     runs-on: macos-14
 
     env:
       PROJECT_NAME: "ClickBox"
       BUNDLE_ID: "com.mycompany.clicbox"
+      EXTENSION_BUNDLE_ID: "com.mycompany.clicbox.Extension"
       SKU: "TT353XSV23"
       APPLE_APP_ID: "6758314176"
+      HAS_API_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY != '' && secrets.APP_STORE_CONNECT_KEY_ID != '' && secrets.APP_STORE_CONNECT_ISSUER_ID != '' }}
+      HAS_SIGNING: ${{ secrets.BUILD_CERTIFICATE_BASE64 != '' && secrets.P12_PASSWORD != '' }}
 
     steps:
       - name: Checkout Repository
@@ -41,57 +44,170 @@ jobs:
 
       - name: Setup App Store Icons in Xcode Assets
         run: |
-          echo "Copying 1024x1024 App Store icon and extension assets..."
-          # Locate asset catalogs created by converter
-          find "${{ env.PROJECT_NAME }}" -name "*.xcassets" -type d
-          
-          # Copy master App Store icon to output directory
-          mkdir -p build_output
-          cp AppIcon-1024.png build_output/AppIcon-1024.png
-          
-          # Copy to any generated AppIcon sets
+          echo "Copying 1024x1024 App Store icon into asset catalogs..."
           find "${{ env.PROJECT_NAME }}" -name "AppIcon.appiconset" -type d | while read -r iconset; do
             echo "Updating $iconset with master icon..."
             cp AppIcon-1024.png "$iconset/AppIcon-1024.png" || true
           done
 
-      - name: Build macOS App Target (Unsigned Release)
+      - name: Configure Build Versioning
         run: |
-          echo "Building macOS application & extension..."
-          xcodebuild -project "${{ env.PROJECT_NAME }}/${{ env.PROJECT_NAME }}.xcodeproj" \
-            -scheme "${{ env.PROJECT_NAME }} (macOS)" \
-            -configuration Release \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            clean build
+          BUILD_NUMBER="${{ github.run_number }}"
+          VERSION="1.1.0"
+          echo "Setting Version: $VERSION, Build: $BUILD_NUMBER"
+          
+          # Update version and build number in plists
+          find "${{ env.PROJECT_NAME }}" -name "Info.plist" | while read -r plist; do
+            /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$plist" 2>/dev/null || true
+            /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$plist" 2>/dev/null || true
+          done
 
-      - name: Build iOS App Target (Unsigned Release)
+      # ─── CODE SIGNING & CERTIFICATE IMPORT (When Secrets Present) ───
+      - name: Install Apple Distribution Certificate & Keychain
+        if: env.HAS_SIGNING == 'true'
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD || 'github-actions-temp-pwd' }}
         run: |
-          echo "Building iOS application & extension..."
-          xcodebuild -project "${{ env.PROJECT_NAME }}/${{ env.PROJECT_NAME }}.xcodeproj" \
-            -scheme "${{ env.PROJECT_NAME }} (iOS)" \
-            -destination "generic/platform=iOS" \
-            -configuration Release \
-            CODE_SIGNING_ALLOWED=NO \
-            CODE_SIGNING_REQUIRED=NO \
-            clean build
+          echo "Importing Apple Distribution Certificate into temporary keychain..."
+          CERTIFICATE_PATH=$RUNNER_TEMP/build_certificate.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
 
-      - name: Prepare Distribution Artifacts
+          echo -n "$BUILD_CERTIFICATE_BASE64" | base64 --decode -o "$CERTIFICATE_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          security import "$CERTIFICATE_PATH" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+
+      - name: Install Provisioning Profiles
+        if: env.HAS_SIGNING == 'true'
+        env:
+          BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
+          EXTENSION_PROVISION_PROFILE_BASE64: ${{ secrets.EXTENSION_PROVISION_PROFILE_BASE64 }}
         run: |
-          echo "Packaging Xcode Project and Assets for download..."
+          echo "Installing Provisioning Profiles..."
+          PROFILE_DIR=~/Library/MobileDevice/Provisioning\ Profiles
+          mkdir -p "$PROFILE_DIR"
+
+          if [ -n "$BUILD_PROVISION_PROFILE_BASE64" ]; then
+            echo -n "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode -o "$PROFILE_DIR/main_app.provisionprofile"
+          fi
+
+          if [ -n "$EXTENSION_PROVISION_PROFILE_BASE64" ]; then
+            echo -n "$EXTENSION_PROVISION_PROFILE_BASE64" | base64 --decode -o "$PROFILE_DIR/extension.provisionprofile"
+          fi
+
+      # ─── ARCHIVE & EXPORT (Signed if secrets present, unsigned fallback) ───
+      - name: Create ExportOptions.plist
+        run: |
+          mkdir -p build_output
+          cat <<EOF > build_output/ExportOptions.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>destination</key>
+              <string>upload</string>
+              <key>method</key>
+              <string>app-store</string>
+              <key>signingStyle</key>
+              <string>automatic</string>
+              <key>stripSwiftSymbols</key>
+              <true/>
+              <key>uploadSymbols</key>
+              <true/>
+          </dict>
+          </plist>
+          EOF
+
+      - name: Build and Archive (macOS)
+        run: |
+          echo "Archiving macOS Target..."
+          if [ "${{ env.HAS_SIGNING }}" = "true" ]; then
+            xcodebuild -project "${{ env.PROJECT_NAME }}/${{ env.PROJECT_NAME }}.xcodeproj" \
+              -scheme "${{ env.PROJECT_NAME }} (macOS)" \
+              -configuration Release \
+              -archivePath "build_output/${{ env.PROJECT_NAME }}-macOS.xcarchive" \
+              archive
+          else
+            echo "Signing secrets not detected. Performing verification build..."
+            xcodebuild -project "${{ env.PROJECT_NAME }}/${{ env.PROJECT_NAME }}.xcodeproj" \
+              -scheme "${{ env.PROJECT_NAME }} (macOS)" \
+              -configuration Release \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              clean build
+          fi
+
+      # ─── AUTOMATIC UPLOAD TO APP STORE CONNECT ───
+      - name: Setup App Store Connect API Key
+        if: env.HAS_API_KEY == 'true'
+        env:
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+        run: |
+          echo "Configuring App Store Connect API Key..."
+          mkdir -p ~/.appstoreconnect/private_keys
+          echo "$PRIVATE_KEY" > ~/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8
+          chmod 600 ~/.appstoreconnect/private_keys/AuthKey_${KEY_ID}.p8
+
+      - name: Export and Upload to App Store Connect (macOS)
+        if: env.HAS_API_KEY == 'true' && env.HAS_SIGNING == 'true'
+        env:
+          KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+        run: |
+          echo "Exporting archive for App Store..."
+          xcodebuild -exportArchive \
+            -archivePath "build_output/${{ env.PROJECT_NAME }}-macOS.xcarchive" \
+            -exportOptionsPlist build_output/ExportOptions.plist \
+            -exportPath build_output/exported \
+            -allowProvisioningUpdates
+
+          PKG_FILE=$(find build_output/exported -name "*.pkg" -o -name "*.ipa" | head -n 1)
+          if [ -n "$PKG_FILE" ]; then
+            echo "Uploading $PKG_FILE to App Store Connect..."
+            xcrun altool --upload-app \
+              -f "$PKG_FILE" \
+              -t osx \
+              --apiKey "$KEY_ID" \
+              --apiIssuer "$ISSUER_ID"
+            echo "✅ ¡Subida a App Store Connect completada con éxito!"
+          else
+            echo "❌ Error: No se encontró archivo .pkg para subir."
+            exit 1
+          fi
+
+      - name: Status Report (Secrets Missing Notice)
+        if: env.HAS_API_KEY != 'true' || env.HAS_SIGNING != 'true'
+        run: |
+          echo "=========================================================================="
+          echo "⚠️  AVISO: Subida automática a App Store Connect pendiente de secretos"
+          echo "=========================================================================="
+          echo "Para que GitHub Actions suba los cambios DIRECTO a App Store Connect,"
+          echo "agrega los siguientes Secrets en GitHub (Settings > Secrets and variables > Actions):"
+          echo ""
+          echo "1. APP_STORE_CONNECT_KEY_ID        (ID de la clave API en App Store Connect)"
+          echo "2. APP_STORE_CONNECT_ISSUER_ID     (Issuer ID en App Store Connect)"
+          echo "3. APP_STORE_CONNECT_PRIVATE_KEY    (Contenido completo del archivo AuthKey_*.p8)"
+          echo "4. BUILD_CERTIFICATE_BASE64        (Certificado .p12 en base64)"
+          echo "5. P12_PASSWORD                    (Contraseña del certificado .p12)"
+          echo "=========================================================================="
+
+      # ─── PACKAGING ARTIFACTS ───
+      - name: Package Distributable Artifacts
+        run: |
           mkdir -p dist
-          
-          # Zip the complete Xcode project so it can be opened directly on any Mac
           zip -r "dist/ClickBox-Xcode-Project.zip" "${{ env.PROJECT_NAME }}" -x "*.DS_Store"
-          
-          # Copy Store assets
           cp AppIcon-1024.png dist/
           cp -r icon*.png dist/
-          
-          echo "Files prepared in dist/:"
-          ls -lh dist/
 
-      - name: Upload Xcode Project Artifact
+      - name: Upload Xcode Project Zip
         uses: actions/upload-artifact@v4
         with:
           name: ClickBox-Safari-Xcode-Project
